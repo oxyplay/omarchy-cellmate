@@ -115,7 +115,11 @@ Panel {
     }
     if (rate <= 0.05) return 0
     if (root.anyDischarging) return totalEnergy / rate * 3600
-    if (root.anyCharging) return Math.max(0, totalCapacity - totalEnergy) / rate * 3600
+    // Charging (or topping off on AC with no Flowing state yet): time to full
+    // from remaining capacity. batteryFlowIdle (full/holding) is handled by
+    // the callers before they format this, so reaching here means charge flow.
+    var missing = totalCapacity - totalEnergy
+    if (missing > 0.1 && !UPower.onBattery) return missing / rate * 3600
     return 0
   }
 
@@ -680,7 +684,7 @@ Panel {
       ? Math.round(root.batteryFraction * 100) + "% " + root.batteryIcon()
       : root.batteryIcon()
     slotSize: Style.bar.iconSlot * (root.showPercentage && !vertical ? 2 : 1)
-    tooltipText: Math.round(root.batteryFraction * 100) + "% · " + (root.batteryFlowIdle ? "-" : Model.formatTime(root.timeEstimateSeconds))
+    tooltipText: Math.round(root.batteryFraction * 100) + "% · " + (root.totalRate > 0.05 ? Model.formatTime(root.timeEstimateSeconds) : (root.batteryFlowIdle ? "Full" : "-"))
     onPressed: function(b) {
       if (!root.batteryPresent) return
       if (b === Qt.RightButton) root.togglePercentage()
@@ -900,7 +904,7 @@ Panel {
           }
 
           Text {
-            text: root.batteryFlowIdle ? "-" : Model.formatTime(root.timeEstimateSeconds)
+            text: root.totalRate > 0.05 ? Model.formatTime(root.timeEstimateSeconds) : (root.batteryFlowIdle ? "Full" : "-")
             color: root.bar.foreground
             opacity: 0.7
             font.family: root.bar.fontFamily
