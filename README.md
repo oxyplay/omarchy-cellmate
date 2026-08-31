@@ -1,5 +1,7 @@
 # Cellmate
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Multi-battery widget for the [Omarchy](https://omarchy.org/) shell.
 One widget for every battery in your laptop: totals, per-cell draw, a live
 wattage history chart, and the top power consumers — no root required.
