@@ -53,6 +53,15 @@ real load changes.
   regenerate with `base64 -w0 topconsumers.sh`)
 - `manifest.json` — Omarchy plugin manifest
 
+## Origin
+
+Cellmate is a derivative of the Omarchy shell power panel
+([`omarchy.power`](https://github.com/basecamp/omarchy)) — the upstream project
+is by the [Omarchy contributors](https://omarchy.org/), released under MIT.
+It was extended with multi-battery aggregation, a persisted wattage history
+chart, and per-process energy attribution. See `NOTICE` for details.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Upstream copyright of the Omarchy contributors
+applies to the derived base code.

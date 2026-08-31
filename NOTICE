@@ -1,0 +1,9 @@
+Cellmate is a derivative of the Omarchy shell "power" panel plugin
+(omarchy.power), originally published by the Omarchy project under the MIT
+License: https://github.com/basecamp/omarchy
+
+The upstream source of the base panel lives at:
+  omarchy/shell/plugins/panels/power/  (Package: omarchy)
+
+Modifications: multi-battery aggregation, wattage history chart with
+persistence, per-process energy attribution, and a compacted UI.
