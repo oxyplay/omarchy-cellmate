@@ -6,7 +6,7 @@ Multi-battery widget for the [Omarchy](https://omarchy.org/) shell.
 One widget for every battery in your laptop: totals, per-cell draw, a live
 wattage history chart, and the top power consumers — no root required.
 
-![Cellmate panel](screenshot.png)
+![Cellmate panel](preview.png)
 
 ## Features
 
