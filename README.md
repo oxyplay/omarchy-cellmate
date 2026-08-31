@@ -32,7 +32,13 @@ omarchy plugin add https://github.com/oxyplay/omarchy-cellmate.git --enable
 Then move the widget to the bar's right section (it is a bar widget):
 
 ```sh
-omarchy bar move cellmate --section right
+omarchy bar move io.github.oxyplay.cellmate --section right
+```
+
+## Remove
+
+```sh
+omarchy plugin remove io.github.oxyplay.cellmate
 ```
 
 Works with any number of batteries (0 hides the widget, 1 behaves like a
