@@ -97,12 +97,20 @@ Panel {
   // ETA; falls back to the instantaneous rate otherwise.
   readonly property real timeEstimateSeconds: {
     var rate = root.totalRate
-    var n = history.length
-    var from = Math.max(0, n - 20)
-    if (n - from >= 3) {
-      var sum = 0
-      for (var i = from; i < n; ++i) sum += history[i].r
-      var avg = sum / (n - from)
+    // Average only samples taken while discharging/charging in the same
+    // direction as now; mixing older opposite-direction rates after an
+    // AC <-> battery switch would skew the ETA for minutes.
+    var want = root.anyDischarging ? 1 : 0
+    var sum = 0
+    var cnt = 0
+    for (var i = history.length - 1; i >= 0 && cnt < 20; --i) {
+      var e = history[i]
+      if (e.b !== want) continue
+      sum += e.r
+      cnt++
+    }
+    if (cnt >= 3) {
+      var avg = sum / cnt
       if (avg > 0.05) rate = avg
     }
     if (rate <= 0.05) return 0
@@ -169,12 +177,13 @@ Panel {
     // Seed two identical points so the chart draws immediately after a shell
     // restart instead of showing "collecting data…" for the first minute.
     if (history.length === 0) {
+      var b = root.anyDischarging ? 1 : 0
       next = [
-        { t: now - 1, p: root.batteryFraction, r: root.totalRate },
-        { t: now, p: root.batteryFraction, r: root.totalRate }
+        { t: now - 1, b: b, p: root.batteryFraction, r: root.totalRate },
+        { t: now, b: b, p: root.batteryFraction, r: root.totalRate }
       ]
     } else {
-      next = history.concat([{ t: now, p: root.batteryFraction, r: root.totalRate }])
+      next = history.concat([{ t: now, b: root.anyDischarging ? 1 : 0, p: root.batteryFraction, r: root.totalRate }])
     }
     if (next.length > 2880) next = next.slice(next.length - 2880)
     history = next
@@ -186,7 +195,7 @@ Panel {
       histAppend.command = ["sh", "-c",
         "f=\"$1\"; mkdir -p \"${f%/*}\"; printf '%s\\n' \"$2\" >> \"$f\"; n=$(wc -l < \"$f\" 2>/dev/null || echo 0); [ \"$n\" -gt 5760 ] && { tail -n 2880 \"$f\" > \"$f.tmp\" 2>/dev/null && mv \"$f.tmp\" \"$f\"; }",
         "sh", root.histFile,
-        String(Math.round(lastEntry.t)) + " " + lastEntry.p.toFixed(4) + " " + lastEntry.r.toFixed(4)]
+        String(Math.round(lastEntry.t)) + " " + lastEntry.p.toFixed(4) + " " + lastEntry.r.toFixed(4) + " " + (lastEntry.b === undefined ? "-1" : String(lastEntry.b))]
       histAppend.running = true
     }
   }
@@ -348,7 +357,9 @@ Panel {
       var p = parseFloat(f[1])
       var r = parseFloat(f[2])
       if (!isFinite(t) || !isFinite(p) || !isFinite(r)) continue
-      pts.push({ t: t, p: p, r: r })
+      var b = f.length > 3 ? parseFloat(f[3]) : -1
+      if (!isFinite(b)) b = -1
+      pts.push({ t: t, b: b, p: p, r: r })
     }
     if (pts.length > 1) history = pts
   }
@@ -586,7 +597,7 @@ Panel {
     id: topProc
     // Embedded from topconsumers.sh (kept in the repo as the source).
     // Regenerate with: base64 -w0 topconsumers.sh
-    command: ["sh", "-c", "printf '%s' IyEvYmluL3NoCiMgQ3VycmVudCBDUFUgc2hhcmUgcGVyIHByb2Nlc3Mgb3ZlciBhIDFzIHdpbmRvdyAoZGVsdGEgb2YgdXRpbWUrc3RpbWUgZnJvbQojIC9wcm9jLyovc3RhdCkuIHBzJyBwY3B1IGlzIGEgbGlmZXRpbWUgYXZlcmFnZSBhbmQgd291bGQgbWlzbGVhZC4gUHJpbnRzCiMgIm5hbWVcdHBjdCIgZm9yIHRoZSB0b3AgcHJvY2Vzc2VzIHBsdXMgYSAiVE9UQUxcdHBjdCIgbGluZSBmb3IgdGhlIHN1bSwgc28KIyB0aGUgcGFuZWwgY2FuIGF0dHJpYnV0ZSB0aGUgbWVhc3VyZWQgYmF0dGVyeSBkcmF3IHRvIGVhY2ggcHJvY2Vzcy4KIwojIGNvbW0oMTUpIHRydW5jYXRlcyBsb25nIG5hbWVzIChwb3dlcnByb2ZpbGVzY3RsIC0+IHBvd2VycHJvZmlsZXNjdCksIGFuZAojIG9ubHkgY29tbSB2YWx1ZXMgYXJlIHNob3duLCBzbyBwcm9iZXMgcnVuIGJ5IHRoaXMgcGFuZWwgYXJlIGZpbHRlcmVkIG91dC4KCnNuYXAoKSB7CiAgYXdrICd7IHAgPSBpbmRleCgkMCwgIigiKQogICAgICAgICBxID0gaW5kZXgoJDAsICIpIikKICAgICAgICAgaWYgKHAgPCAxIHx8IHEgPD0gcCkgbmV4dAogICAgICAgICBzcGxpdChzdWJzdHIoJDAsIHEgKyAxKSwgZiwgIiAiKQogICAgICAgICBwcmludGYgIiVzXHQlc1x0JWRcbiIsICQxLCBzdWJzdHIoJDAsIHAgKyAxLCBxIC0gcCAtIDEpLCBmWzEyXSArIGZbMTNdCiAgICAgICB9JyAvcHJvYy9bMC05XSovc3RhdCAyPi9kZXYvbnVsbAp9CgpzbmFwID4gL3RtcC8ub21hcmNoeS1wdy4xCnNsZWVwIDEKc25hcCA+IC90bXAvLm9tYXJjaHktcHcuMgoKYXdrIC1GJ1x0JyAnCiAgTlIgPT0gRk5SIHsgdDFbJDFdID0gJDM7IG5leHQgfQogICgkMSBpbiB0MSkgewogICAgZCA9ICQzIC0gdDFbJDFdCiAgICBpZiAoZCA8IDApIGQgPSAwCiAgICBpZiAoZCA8IDEpIG5leHQgICAgICAgICAgIyBiZWxvdyB+MSUgQ1BVCiAgICBuID0gJDIKICAgIGlmIChuID09ICJwcyIgfHwgbiA9PSAic2giIHx8IG4gPT0gInRvcCIgfHwgbiA9PSAicG93ZXJwcm9maWxlc2N0IikgbmV4dAogICAgc3VtW25dICs9IGQKICAgIHRvdCArPSBkCiAgfQogIEVORCB7CiAgICBmb3IgKG4gaW4gc3VtKSBwcmludGYgIiVzXHQlLjFmXG4iLCBuLCBzdW1bbl0KICAgIHByaW50ZiAiVE9UQUxcdCUuMWZcbiIsIHRvdAogIH0KJyAvdG1wLy5vbWFyY2h5LXB3LjEgL3RtcC8ub21hcmNoeS1wdy4yIHwgc29ydCAtazIsMnJuIHwgaGVhZCAtNw== | base64 -d | sh"]
+    command: ["sh", "-c", "printf '%s' IyEvYmluL3NoCiMgQ3VycmVudCBDUFUgc2hhcmUgcGVyIHByb2Nlc3Mgb3ZlciBhIDFzIHdpbmRvdyAoZGVsdGEgb2YgdXRpbWUrc3RpbWUgZnJvbQojIC9wcm9jLyovc3RhdCkuIHBzJyBwY3B1IGlzIGEgbGlmZXRpbWUgYXZlcmFnZSBhbmQgd291bGQgbWlzbGVhZC4gUHJpbnRzCiMgIm5hbWVcdHBjdCIgZm9yIHRoZSB0b3AgcHJvY2Vzc2VzIHBsdXMgYSAiVE9UQUxcdHBjdCIgbGluZSBmb3IgdGhlIHN1bSwgc28KIyB0aGUgcGFuZWwgY2FuIGF0dHJpYnV0ZSB0aGUgbWVhc3VyZWQgYmF0dGVyeSBkcmF3IGJ5IHNoYXJlLiBUaGUgcGN0IGlzCiMgY29tcHV0ZWQgZnJvbSByZWFsIHRpY2tzIGFuZCBDTEtfVENLLCBzbyBpdCBzdGF5cyBjb3JyZWN0IG9uIG5vbi0xMDBIegojIHN5c3RlbXMuCiMKIyBjb21tKDE1KSB0cnVuY2F0ZXMgbG9uZyBuYW1lcyAocG93ZXJwcm9maWxlc2N0bCAtPiBwb3dlcnByb2ZpbGVzY3QpLCBhbmQKIyBvbmx5IGNvbW0gdmFsdWVzIGFyZSBzaG93biwgc28gcHJvYmVzIHJ1biBieSB0aGlzIHBhbmVsIGFyZSBmaWx0ZXJlZCBvdXQuCiMKIyBTY3JhdGNoIGZpbGVzIGxpdmUgaW4gYSBta3RlbXAgZGlyIHJlbW92ZWQgb24gZXhpdDogbm8gZml4ZWQgL3RtcCBwYXRocywKIyBzbyBubyBzeW1saW5rLXN1YnN0aXR1dGlvbiBvciByYWNlcyB3aXRoIG90aGVyIHVzZXJzIG9mIHRoZSBzYW1lIGhvc3QuCgpzZXQgLXUKCmh6PSQoZ2V0Y29uZiBDTEtfVENLKQpbICIkaHoiIC1ndCAwIF0gfHwgaHo9MTAwCgp0bXBkaXI9JChta3RlbXAgLWQgIiR7VE1QRElSOi0vdG1wfS9vbWFyY2h5LWNlbGxtYXRlLlhYWFhYWCIpIHx8IGV4aXQgMQp0cmFwICdybSAtcmYgIiR0bXBkaXIiJyBFWElUCmYxPSIkdG1wZGlyL3B3LjEiCmYyPSIkdG1wZGlyL3B3LjIiCgpzbmFwKCkgewogIGF3ayAneyBwID0gaW5kZXgoJDAsICIoIikKICAgICAgICAgcSA9IGluZGV4KCQwLCAiKSIpCiAgICAgICAgIGlmIChwIDwgMSB8fCBxIDw9IHApIG5leHQKICAgICAgICAgc3BsaXQoc3Vic3RyKCQwLCBxICsgMSksIGYsICIgIikKICAgICAgICAgcHJpbnRmICIlc1x0JXNcdCVkXG4iLCAkMSwgc3Vic3RyKCQwLCBwICsgMSwgcSAtIHAgLSAxKSwgZlsxMl0gKyBmWzEzXQogICAgICAgfScgL3Byb2MvWzAtOV0qL3N0YXQgMj4vZGV2L251bGwKfQoKc25hcCA+ICIkZjEiCnNsZWVwIDEKc25hcCA+ICIkZjIiCgphd2sgLXYgaHo9IiRoeiIgLUYnXHQnICcKICBOUiA9PSBGTlIgeyB0MVskMV0gPSAkMzsgbmV4dCB9CiAgKCQxIGluIHQxKSB7CiAgICBkID0gJDMgLSB0MVskMV0KICAgIGlmIChkIDwgMCkgZCA9IDAKICAgIHBjdCA9IGQgLyBoeiAqIDEwMAogICAgaWYgKHBjdCA8IDAuNSkgbmV4dAogICAgbiA9ICQyCiAgICBpZiAobiA9PSAicHMiIHx8IG4gPT0gInNoIiB8fCBuID09ICJ0b3AiIHx8IG4gPT0gInBvd2VycHJvZmlsZXNjdCIpIG5leHQKICAgIHN1bVtuXSArPSBwY3QKICAgIHRvdCArPSBwY3QKICB9CiAgRU5EIHsKICAgIGZvciAobiBpbiBzdW0pIHByaW50ZiAiJXNcdCUuMWZcbiIsIG4sIHN1bVtuXQogICAgcHJpbnRmICJUT1RBTFx0JS4xZlxuIiwgdG90CiAgfQonICIkZjEiICIkZjIiIHwgc29ydCAtazIsMnJuIHwgaGVhZCAtNw== | base64 -d | sh"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateTopConsumers(text) }
   }
 
@@ -938,7 +949,7 @@ Panel {
           spacing: Style.space(4)
 
           Text {
-            text: "TOP CONSUMERS"
+            text: "EST. TOP CONSUMERS"
             color: Qt.darker(root.bar.foreground, 1.4)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
