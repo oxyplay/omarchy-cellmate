@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Self-check for history.py: symlink/FIFO/hardlink/overflow must not leak."""
 import os
+import re
 import stat
 import tempfile
 import time
@@ -100,8 +101,19 @@ class HistorySecurity(unittest.TestCase):
             history.open_state_dir()
         self.dirfd = os.open(self.tmp, os.O_RDONLY | os.O_DIRECTORY)
 
-    def test_ancestor_symlink_resolved(self):
-        """Symlink in an ancestor resolves via realpath; walk creates omarchy at real location."""
+    def test_relative_state_rejected(self):
+        """Relative XDG_STATE_HOME raises OSError."""
+        os.environ["XDG_STATE_HOME"] = "relative/state"
+        os.environ.pop("HOME", None)
+        with self.assertRaises(OSError):
+            history.open_state_dir()
+        os.environ.pop("XDG_STATE_HOME", None)
+        os.environ["HOME"] = "relative"
+        with self.assertRaises(OSError):
+            history.open_state_dir()
+
+    def test_ancestor_symlink_rejected(self):
+        """Ancestor symlink in XDG_STATE_HOME raises OSError; no write under its target."""
         base = tempfile.mkdtemp(prefix="cellmate-ancestor-")
         try:
             target = os.path.join(base, "target")
@@ -111,32 +123,65 @@ class HistorySecurity(unittest.TestCase):
             state_dir = os.path.join(link, "state")
             os.environ["XDG_STATE_HOME"] = state_dir
             os.environ.pop("HOME", None)
-            fd = history.open_state_dir()
-            resolved = os.path.realpath(state_dir)
-            omarchy_path = os.path.join(resolved, "omarchy")
-            self.assertTrue(os.path.isdir(omarchy_path))
-            self.assertEqual(os.stat(omarchy_path).st_uid, os.getuid())
-            os.close(fd)
+            with self.assertRaises(OSError):
+                history.open_state_dir()
+            self.assertEqual(os.listdir(target), [],
+                             "symlink target must remain untouched")
         finally:
             os.system("rm -rf %s" % base)
 
     def test_panel_qml_process_safety(self):
-        """Every Process block in Panel.qml has clearEnvironment + trusted PATH."""
+        """Every Process block in Panel.qml has clearEnvironment, pinned PATH,
+        and automatic producers use absolute executables (hostile-PATH regression)."""
         panel_path = os.path.join(os.path.dirname(__file__), "Panel.qml")
         with open(panel_path) as f:
             content = f.read()
-        proc_blocks = sum(1 for line in content.splitlines() if "Process {" in line)
-        clear_env = content.count("clearEnvironment: true")
-        trusted_path = content.count("/run/current-system/sw/bin:/usr/bin:/bin")
-        self.assertGreater(proc_blocks, 0, "no Process blocks found in Panel.qml")
-        self.assertEqual(
-            proc_blocks, clear_env,
-            f"Panel.qml: {proc_blocks} Process blocks, {clear_env} have clearEnvironment: true"
-        )
-        self.assertEqual(
-            proc_blocks, trusted_path,
-            f"Panel.qml: {proc_blocks} Process blocks, {trusted_path} have trusted PATH"
-        )
+        lines = content.splitlines()
+        # Split into Process blocks by tracking brace depth.
+        blocks = []
+        i = 0
+        while i < len(lines):
+            if lines[i].strip().endswith("Process {"):
+                start = i
+                depth = 1
+                j = i + 1
+                while j < len(lines) and depth > 0:
+                    depth += lines[j].count("{") - lines[j].count("}")
+                    j += 1
+                blocks.append("\n".join(lines[start:j]))
+            i += 1
+        self.assertGreater(len(blocks), 0, "no Process blocks in Panel.qml")
+        known_pids = set()
+        for block in blocks:
+            self.assertIn("clearEnvironment: true", block,
+                          "block missing clearEnvironment:\n" + block)
+            self.assertIn("environment: ({", block,
+                          "block missing environment:\n" + block)
+            self.assertIn(
+                'PATH: "/run/current-system/sw/bin:/usr/bin:/bin"', block,
+                "block missing pinned PATH:\n" + block)
+            # Extract block id (present on named processes).
+            m = re.search(r'\bid:\s*(\w+)', block)
+            pid = m.group(1) if m else "anonymous"
+            known_pids.add(pid)
+            if pid in ("detailsProc", "profilesProc", "histLoad",
+                       "histAppend", "topProc", "actionProc"):
+                # Automatic processes: every externally-resolved executable
+                # (timeout, python3, sh) MUST be absolute to resist hostile PATH.
+                self.assertNotIn(
+                    '"timeout"', block,
+                    f"{pid} uses bare \"timeout\"; must be absolute")
+                self.assertNotIn(
+                    '"python3"', block,
+                    f"{pid} uses bare \"python3\"; must be absolute")
+                self.assertNotIn(
+                    '"sh"', block,
+                    f"{pid} uses bare \"sh\"; must be absolute")
+        # Verify all expected named processes were found.
+        expected = {"detailsProc", "profilesProc", "histLoad",
+                    "histAppend", "topProc", "actionProc"}
+        missing = expected - known_pids
+        self.assertFalse(missing, f"expected Process blocks missing: {missing}")
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ Panel {
     var devices = UPower.devices.values
     for (var i = 0; i < devices.length; ++i) {
       var d = devices[i]
-      if (d && d.type === UPowerDeviceType.Battery && d.isPresent) out.push(d)
+      if (d && d.isLaptopBattery && d.isPresent) out.push(d)
     }
     out.sort(function(a, b) { return String(a.nativePath).localeCompare(String(b.nativePath)) })
     return out
@@ -186,7 +186,7 @@ Panel {
 
   function timeoutCmd(sec, argv) {
     // GNU timeout: own process group, SIGTERM at sec, SIGKILL 1s later.
-    return ["timeout", "--kill-after=1", String(sec)].concat(argv)
+    return ["/usr/bin/timeout", "--kill-after=1", String(sec)].concat(argv)
   }
 
   function startExclusive(proc) {
@@ -225,7 +225,7 @@ Panel {
       var p = Math.max(0, Math.min(1, lastEntry.p))
       var r = Math.max(0, Math.min(9999, lastEntry.r))
       var b = lastEntry.b === 0 || lastEntry.b === 1 ? String(lastEntry.b) : "-1"
-      histAppend.command = root.timeoutCmd(3, ["python3", root.pluginPath("history.py"), "append",
+      histAppend.command = root.timeoutCmd(3, ["/usr/bin/python3", root.pluginPath("history.py"), "append",
         String(Math.round(lastEntry.t)) + " " + p.toFixed(4) + " " + r.toFixed(4) + " " + b])
       histAppend.running = true
     }
@@ -567,7 +567,9 @@ Panel {
   function setProfile(profile) {
     profile = Model.safeText(profile, 32)
     if (!/^[a-z0-9_-]+$/.test(profile) || actionProc.running) return
-    actionProc.command = ["omarchy-powerprofiles-set", root.discharging ? "battery" : "ac", profile]
+    actionProc.command = root.timeoutCmd(3, ["/usr/bin/sh", "-c",
+      "\"$HOME/.local/share/omarchy/bin/omarchy-powerprofiles-set\" " +
+      (root.discharging ? "battery" : "ac") + " " + profile])
     actionProc.running = true
   }
 
@@ -616,7 +618,7 @@ Panel {
       HOME: null,
       XDG_STATE_HOME: null,
     })
-    command: root.timeoutCmd(3, ["sh", "-c",
+    command: root.timeoutCmd(3, ["/usr/bin/sh", "-c",
       "c=0; for d in /sys/class/power_supply/BAT*; do " +
       "[ -d \"$d\" ] || continue; c=$((c+1)); [ \"$c\" -gt 8 ] && break; " +
       "b=${d##*/}; case \"$b\" in BAT[A-Za-z0-9_]*) ;; *) continue ;; esac; " +
@@ -638,7 +640,7 @@ Panel {
       XDG_STATE_HOME: null,
     })
     running: true
-    command: root.timeoutCmd(3, ["python3", root.pluginPath("history.py"), "load"])
+    command: root.timeoutCmd(3, ["/usr/bin/python3", root.pluginPath("history.py"), "load"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateHistoryFromFile(text) }
   }
 
@@ -664,7 +666,7 @@ Panel {
       HOME: null,
       XDG_STATE_HOME: null,
     })
-    command: root.timeoutCmd(5, ["sh", root.pluginPath("topconsumers.sh")])
+    command: root.timeoutCmd(5, ["/usr/bin/sh", root.pluginPath("topconsumers.sh")])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateTopConsumers(text) }
   }
 
@@ -676,7 +678,8 @@ Panel {
       HOME: null,
       XDG_STATE_HOME: null,
     })
-    command: root.timeoutCmd(3, ["sh", "-c", "omarchy-powerprofiles-list --active-state | head -c 4096"])
+    command: root.timeoutCmd(3, ["/usr/bin/sh", "-c",
+      "\"$HOME/.local/share/omarchy/bin/omarchy-powerprofiles-list\" --active-state | /usr/bin/head -c 4096"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateProfiles(text) }
   }
 

@@ -15,7 +15,7 @@ wattage history chart, and the top power consumers — no root required.
 - **Totals at a glance** — combined percentage, draw and time-left estimated
   from a 10-minute trailing average (so CPU bursts don't jiggle the ETA).
 - **Wattage history chart** — 30s samples persisted to
-  `~/.local/state/omarchy/power-history.log` (2-day cap), so the graph survives
+    `~/.local/state/omarchy/power-history.log` (24h cap), so the graph survives
   shell restarts. Hover for a crosshair readout; simple, no clutter.
 - **Top energy consumers** — real current CPU share measured over a 1s window
   (`ps pcpu` is a lifetime average and lies), attributed to the measured

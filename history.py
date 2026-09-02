@@ -30,16 +30,19 @@ def _die(*_):
 
 def open_state_dir():
     state = os.environ.get("XDG_STATE_HOME")
-    if not state:
+    if state:
+        if not state.startswith("/"):
+            raise OSError("XDG_STATE_HOME must be an absolute path")
+    else:
         home = os.environ.get("HOME")
-        if not home:
-            raise OSError("no HOME")
+        if not home or not home.startswith("/"):
+            raise OSError("HOME must be an absolute path")
         state = os.path.join(home, ".local", "state")
-    # realpath resolves any system-level symlinks (macOS /var -> /private/var),
-    # then the walk from / uses O_DIRECTORY|O_NOFOLLOW on every component to
-    # prevent symlink-redirection races in parent directories. os.makedirs
-    # followed by O_NOFOLLOW only protects the final component.
-    state = os.path.realpath(state)
+    # Walk from / with O_DIRECTORY|O_NOFOLLOW on every component.
+    # No preceding realpath: following symlinks before the trusted
+    # descriptor walk would let an ancestor symlink redirect the
+    # whole tree; rejecting relative paths prevents cwd-dependent
+    # state location.
     parts = [p for p in state.split(os.sep) if p]
     fd = os.open(b"/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
@@ -48,11 +51,22 @@ def open_state_dir():
                 os.mkdir(part, mode=0o755, dir_fd=fd)
             except FileExistsError:
                 pass
-            next_fd = os.open(
-                part,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                dir_fd=fd,
-            )
+            try:
+                next_fd = os.open(part, OPEN_DIR, dir_fd=fd)
+            except OSError:
+                # The component may be a platform system symlink
+                # (e.g. /var -> /private/var on macOS). Open without
+                # O_NOFOLLOW and verify it is root-owned — only a
+                # root-owned existing entry may be followed.
+                next_fd = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+                    dir_fd=fd,
+                )
+                st = os.fstat(next_fd)
+                if st.st_uid != 0:
+                    os.close(next_fd)
+                    raise OSError("non-root symlink in state path")
             os.close(fd)
             fd = next_fd
         # fd is now the state directory
