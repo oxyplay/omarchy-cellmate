@@ -13,7 +13,6 @@ Panel {
   // manageIpc: false so this panel can own the single IpcHandler the target
   // permits — needed for the togglePercentage method below.
   manageIpc: false
-  property var systemInfo: ({})
   property var profiles: []
   property string activeProfile: ""
   property int profileIndex: 0
@@ -148,25 +147,52 @@ Panel {
   }
 
   function updateBatteryDetails(raw) {
+    var s = String(raw || "")
+    if (s.length > 4096) s = s.substring(0, 4096)
     var next = {}
-    var lines = String(raw || "").split("\n")
+    var nbat = 0
+    var lines = s.split("\n")
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i]
       if (!line) continue
       var parts = line.split("\t")
       if (parts.length < 3) continue
-      if (!next[parts[1]]) next[parts[1]] = {}
-      next[parts[1]][parts[0]] = parts[2]
+      var key = parts[0]
+      if (key !== "cycles" && key !== "threshold" && key !== "threshold-start") continue
+      var bat = Model.safeText(parts[1], 16)
+      if (!/^BAT[A-Za-z0-9_]*$/.test(bat)) continue
+      var val = Number(parts[2])
+      if (!isFinite(val) || val < 0 || val > 99999) continue
+      if (!next[bat]) {
+        if (nbat >= 8) continue
+        next[bat] = {}
+        nbat++
       }
-      batteryDetails = next
+      next[bat][key] = String(Math.round(val))
+    }
+    batteryDetails = next
   }
 
   // ---- History sampling (chart) ----
   // 30s samples, up to 24h. Persisted to ~/.local/state/omarchy/power-history.log
-  // (one "t p r" line per sample, capped at 2 days) so the chart survives shell
-  // restarts; the newest 24h of the file is loaded back at startup.
+  // (one "t p r b" line per sample, capped at 24h) so the chart survives shell
+  // restarts; the file is loaded back at startup through history.py.
   property var history: []
-  readonly property string histFile: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/omarchy/power-history.log"
+  function pluginPath(name) {
+    var u = String(Qt.resolvedUrl(name))
+    if (u.indexOf("file://") === 0) return decodeURIComponent(u.substring(7))
+    return name
+  }
+
+  function timeoutCmd(sec, argv) {
+    // GNU timeout: own process group, SIGTERM at sec, SIGKILL 1s later.
+    return ["timeout", "--kill-after=1", String(sec)].concat(argv)
+  }
+
+  function startExclusive(proc) {
+    if (!proc || proc.running) return
+    proc.running = true
+  }
   property string chartMode: "draw"    // "pct" | "draw"
   property bool chartHover: false
   property real chartHoverX: -1
@@ -196,10 +222,11 @@ Panel {
     // Persist the newest sample; the shell script also caps the file at 2 days.
     var lastEntry = next[next.length - 1]
     if (!histAppend.running) {
-      histAppend.command = ["sh", "-c",
-        "f=\"$1\"; mkdir -p \"${f%/*}\"; printf '%s\\n' \"$2\" >> \"$f\"; n=$(wc -l < \"$f\" 2>/dev/null || echo 0); [ \"$n\" -gt 5760 ] && { tail -n 2880 \"$f\" > \"$f.tmp\" 2>/dev/null && mv \"$f.tmp\" \"$f\"; }",
-        "sh", root.histFile,
-        String(Math.round(lastEntry.t)) + " " + lastEntry.p.toFixed(4) + " " + lastEntry.r.toFixed(4) + " " + (lastEntry.b === undefined ? "-1" : String(lastEntry.b))]
+      var p = Math.max(0, Math.min(1, lastEntry.p))
+      var r = Math.max(0, Math.min(9999, lastEntry.r))
+      var b = lastEntry.b === 0 || lastEntry.b === 1 ? String(lastEntry.b) : "-1"
+      histAppend.command = root.timeoutCmd(3, ["python3", root.pluginPath("history.py"), "append",
+        String(Math.round(lastEntry.t)) + " " + p.toFixed(4) + " " + r.toFixed(4) + " " + b])
       histAppend.running = true
     }
   }
@@ -352,38 +379,51 @@ Panel {
   readonly property bool energyAttribution: root.anyDischarging && root.totalRate > 0.5
 
   function updateHistoryFromFile(raw) {
-    var lines = String(raw || "").trim().split("\n")
+    var s = String(raw || "")
+    if (s.length > 200000) s = s.substring(s.length - 200000)
+    var lines = s.split("\n")
     var pts = []
     for (var i = 0; i < lines.length; ++i) {
-      var f = lines[i].trim().split(" ")
+      var line = lines[i].trim()
+      if (!line || line.length > 80) continue
+      var f = line.split(" ")
       if (f.length < 3) continue
-      var t = parseFloat(f[0])
-      var p = parseFloat(f[1])
-      var r = parseFloat(f[2])
-      if (!isFinite(t) || !isFinite(p) || !isFinite(r)) continue
-      var b = f.length > 3 ? parseFloat(f[3]) : -1
-      if (!isFinite(b)) b = -1
+      var t = Number(f[0])
+      var p = Number(f[1])
+      var r = Number(f[2])
+      if (!isFinite(t) || t < 1e9 || t > 2e10) continue
+      if (!isFinite(p) || p < 0 || p > 1) continue
+      if (!isFinite(r) || r < 0 || r > 9999) continue
+      var b = f.length > 3 ? Number(f[3]) : -1
+      if (b !== 0 && b !== 1) b = -1
       pts.push({ t: t, b: b, p: p, r: r })
+      if (pts.length > 2880) pts = pts.slice(pts.length - 2880)
     }
     if (pts.length > 1) history = pts
   }
 
   function updateTopConsumers(raw) {
+    var s = String(raw || "")
+    if (s.length > 4096) s = s.substring(0, 4096)
     var out = []
-    var lines = String(raw || "").trim().split("\n")
+    var lines = s.split("\n")
     var total = 0
     for (var i = 0; i < lines.length; ++i) {
       var line = lines[i]
       if (!line) continue
       var t = line.split("\t")
       if (t.length < 2) continue
+      var cpu = Number(t[1])
+      if (!isFinite(cpu) || cpu < 0 || cpu > 9999) continue
       if (t[0] === "TOTAL") {
-        total = Number(t[1])
+        total = cpu
         continue
       }
-      out.push({ name: t[0], cpu: Number(t[1]) })
+      if (out.length >= 3) continue
+      var name = Model.safeText(t[0], 32)
+      if (!name) continue
+      out.push({ name: name, cpu: cpu })
     }
-    if (out.length > 3) out = out.slice(0, 3)
     topConsumers = out
     consumersTotalCpu = total > 0 ? total : 1
   }
@@ -505,18 +545,9 @@ Panel {
     if (!batteryPresent) return
 
     sampleHistory()
-    if (!profilesProc.running) profilesProc.running = true
-    if (!systemProc.running) systemProc.running = true
-    if (!detailsProc.running) detailsProc.running = true
-    if (!topProc.running) topProc.running = true
-  }
-
-  function updateSystemInfo(raw) {
-    var next = Model.parseKeyValue(raw)
-    // Keep last known good data if a refresh briefly returns nothing — happens
-    // around AC plug/unplug events. Avoids the section collapsing mid-transition.
-    if (Object.keys(next).length === 0) return
-    systemInfo = next
+    startExclusive(profilesProc)
+    startExclusive(detailsProc)
+    startExclusive(topProc)
   }
 
   function updateProfiles(raw) {
@@ -534,7 +565,8 @@ Panel {
   }
 
   function setProfile(profile) {
-    if (!profile || actionProc.running) return
+    profile = Model.safeText(profile, 32)
+    if (!/^[a-z0-9_-]+$/.test(profile) || actionProc.running) return
     actionProc.command = ["omarchy-powerprofiles-set", root.discharging ? "battery" : "ac", profile]
     actionProc.running = true
   }
@@ -578,43 +610,44 @@ Panel {
   // sysfs-only battery details (charge thresholds, cycle counts) per battery.
   Process {
     id: detailsProc
-    command: ["sh", "-c", "for d in /sys/class/power_supply/BAT*; do [ -r \"$d\"/cycle_count ] && printf 'cycles\\t%s\\t%s\\n' \"${d##*/}\" \"$(<\"$d\"/cycle_count)\"; [ -r \"$d\"/charge_control_end_threshold ] && printf 'threshold\\t%s\\t%s\\n' \"${d##*/}\" \"$(<\"$d\"/charge_control_end_threshold)\"; [ -r \"$d\"/charge_control_start_threshold ] && printf 'threshold-start\\t%s\\t%s\\n' \"${d##*/}\" \"$(<\"$d\"/charge_control_start_threshold)\"; done"]
+    command: root.timeoutCmd(3, ["sh", "-c",
+      "c=0; for d in /sys/class/power_supply/BAT*; do " +
+      "[ -d \"$d\" ] || continue; c=$((c+1)); [ \"$c\" -gt 8 ] && break; " +
+      "b=${d##*/}; case \"$b\" in BAT[A-Za-z0-9_]*) ;; *) continue ;; esac; " +
+      "[ ${#b} -gt 16 ] && continue; " +
+      "for spec in cycle_count:cycles charge_control_end_threshold:threshold charge_control_start_threshold:threshold-start; do " +
+      "f=${spec%%:*}; n=${spec##*:}; [ -r \"$d/$f\" ] || continue; " +
+      "v=$(dd if=\"$d/$f\" bs=16 count=1 2>/dev/null | tr -cd '0-9'); " +
+      "[ -n \"$v\" ] && printf '%s\\t%s\\t%s\\n' \"$n\" \"$b\" \"$v\"; " +
+      "done; done"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateBatteryDetails(text) }
   }
   // Load persisted history back (newest 24h) at shell startup.
   Process {
     id: histLoad
     running: true
-    command: ["sh", "-c", "tail -n 2880 \"$1\" 2>/dev/null", "sh", root.histFile]
+    command: root.timeoutCmd(3, ["python3", root.pluginPath("history.py"), "load"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateHistoryFromFile(text) }
   }
 
-  // Appends one "t p r" line per sample; see sampleHistory().
+  // Appends one "t p r b" line per sample; see sampleHistory().
   Process {
     id: histAppend
   }
 
   // Top consumers: current CPU share over a 1s window (delta of utime+stime
-  // from /proc/*/stat — ps pcpu is a lifetime average and lies), normalized
+  // from /proc/<pid>/stat — ps pcpu is a lifetime average and lies), normalized
   // into watts of the measured battery draw when discharging.
   Process {
     id: topProc
-    // Embedded from topconsumers.sh (kept in the repo as the source).
-    // Regenerate with: base64 -w0 topconsumers.sh
-    command: ["sh", "-c", "printf '%s' IyEvYmluL3NoCiMgQ3VycmVudCBDUFUgc2hhcmUgcGVyIHByb2Nlc3Mgb3ZlciBhIDFzIHdpbmRvdyAoZGVsdGEgb2YgdXRpbWUrc3RpbWUgZnJvbQojIC9wcm9jLyovc3RhdCkuIHBzJyBwY3B1IGlzIGEgbGlmZXRpbWUgYXZlcmFnZSBhbmQgd291bGQgbWlzbGVhZC4gUHJpbnRzCiMgIm5hbWVcdHBjdCIgZm9yIHRoZSB0b3AgcHJvY2Vzc2VzIHBsdXMgYSAiVE9UQUxcdHBjdCIgbGluZSBmb3IgdGhlIHN1bSwgc28KIyB0aGUgcGFuZWwgY2FuIGF0dHJpYnV0ZSB0aGUgbWVhc3VyZWQgYmF0dGVyeSBkcmF3IGJ5IHNoYXJlLiBUaGUgcGN0IGlzCiMgY29tcHV0ZWQgZnJvbSByZWFsIHRpY2tzIGFuZCBDTEtfVENLLCBzbyBpdCBzdGF5cyBjb3JyZWN0IG9uIG5vbi0xMDBIegojIHN5c3RlbXMuCiMKIyBjb21tKDE1KSB0cnVuY2F0ZXMgbG9uZyBuYW1lcyAocG93ZXJwcm9maWxlc2N0bCAtPiBwb3dlcnByb2ZpbGVzY3QpLCBhbmQKIyBvbmx5IGNvbW0gdmFsdWVzIGFyZSBzaG93biwgc28gcHJvYmVzIHJ1biBieSB0aGlzIHBhbmVsIGFyZSBmaWx0ZXJlZCBvdXQuCiMKIyBTY3JhdGNoIGZpbGVzIGxpdmUgaW4gYSBta3RlbXAgZGlyIHJlbW92ZWQgb24gZXhpdDogbm8gZml4ZWQgL3RtcCBwYXRocywKIyBzbyBubyBzeW1saW5rLXN1YnN0aXR1dGlvbiBvciByYWNlcyB3aXRoIG90aGVyIHVzZXJzIG9mIHRoZSBzYW1lIGhvc3QuCgpzZXQgLXUKCmh6PSQoZ2V0Y29uZiBDTEtfVENLKQpbICIkaHoiIC1ndCAwIF0gfHwgaHo9MTAwCgp0bXBkaXI9JChta3RlbXAgLWQgIiR7VE1QRElSOi0vdG1wfS9vbWFyY2h5LWNlbGxtYXRlLlhYWFhYWCIpIHx8IGV4aXQgMQp0cmFwICdybSAtcmYgIiR0bXBkaXIiJyBFWElUCmYxPSIkdG1wZGlyL3B3LjEiCmYyPSIkdG1wZGlyL3B3LjIiCgpzbmFwKCkgewogIGF3ayAneyBwID0gaW5kZXgoJDAsICIoIikKICAgICAgICAgcSA9IGluZGV4KCQwLCAiKSIpCiAgICAgICAgIGlmIChwIDwgMSB8fCBxIDw9IHApIG5leHQKICAgICAgICAgc3BsaXQoc3Vic3RyKCQwLCBxICsgMSksIGYsICIgIikKICAgICAgICAgcHJpbnRmICIlc1x0JXNcdCVkXG4iLCAkMSwgc3Vic3RyKCQwLCBwICsgMSwgcSAtIHAgLSAxKSwgZlsxMl0gKyBmWzEzXQogICAgICAgfScgL3Byb2MvWzAtOV0qL3N0YXQgMj4vZGV2L251bGwKfQoKc25hcCA+ICIkZjEiCnNsZWVwIDEKc25hcCA+ICIkZjIiCgphd2sgLXYgaHo9IiRoeiIgLUYnXHQnICcKICBOUiA9PSBGTlIgeyB0MVskMV0gPSAkMzsgbmV4dCB9CiAgKCQxIGluIHQxKSB7CiAgICBkID0gJDMgLSB0MVskMV0KICAgIGlmIChkIDwgMCkgZCA9IDAKICAgIHBjdCA9IGQgLyBoeiAqIDEwMAogICAgaWYgKHBjdCA8IDAuNSkgbmV4dAogICAgbiA9ICQyCiAgICBpZiAobiA9PSAicHMiIHx8IG4gPT0gInNoIiB8fCBuID09ICJ0b3AiIHx8IG4gPT0gInBvd2VycHJvZmlsZXNjdCIpIG5leHQKICAgIHN1bVtuXSArPSBwY3QKICAgIHRvdCArPSBwY3QKICB9CiAgRU5EIHsKICAgIGZvciAobiBpbiBzdW0pIHByaW50ZiAiJXNcdCUuMWZcbiIsIG4sIHN1bVtuXQogICAgcHJpbnRmICJUT1RBTFx0JS4xZlxuIiwgdG90CiAgfQonICIkZjEiICIkZjIiIHwgc29ydCAtazIsMnJuIHwgaGVhZCAtNw== | base64 -d | sh"]
+    command: root.timeoutCmd(5, ["sh", root.pluginPath("topconsumers.sh")])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateTopConsumers(text) }
   }
 
   Process {
     id: profilesProc
-    command: ["omarchy-powerprofiles-list", "--active-state"]
+    command: root.timeoutCmd(3, ["sh", "-c", "omarchy-powerprofiles-list --active-state | head -c 4096"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateProfiles(text) }
-  }
-
-  Process {
-    id: systemProc
-    command: ["omarchy-system-stats"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateSystemInfo(text) }
   }
 
   Process {
@@ -840,11 +873,13 @@ Panel {
 
               Text {
                 id: cellLabel
-                text: String(modelData.nativePath)
+                textFormat: Text.PlainText
+                text: Model.safeText(String(modelData.nativePath), 64)
                 color: root.bar.foreground
                 opacity: 0.6
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 width: Style.space(44)
@@ -896,6 +931,7 @@ Panel {
           spacing: Style.space(10)
 
           Text {
+            textFormat: Text.PlainText
             text: Model.rateLabel(root.aggregateDevice)
             color: root.bar.foreground
             font.family: root.bar.fontFamily
@@ -904,6 +940,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: root.totalRate > 0.05 ? Model.formatTime(root.timeEstimateSeconds) : (root.batteryFlowIdle ? "Full" : "-")
             color: root.bar.foreground
             opacity: 0.7
@@ -971,7 +1008,8 @@ Panel {
 
               Text {
                 id: consName
-                text: modelData.name
+                textFormat: Text.PlainText
+                text: Model.safeText(modelData.name, 32)
                 elide: Text.ElideRight
                 width: Style.space(110)
                 anchors.left: parent.left
@@ -1005,6 +1043,7 @@ Panel {
 
               Text {
                 id: consPct
+                textFormat: Text.PlainText
                 text: root.consumerValue(modelData.cpu)
                 width: Style.space(52)
                 horizontalAlignment: Text.AlignRight
@@ -1050,7 +1089,7 @@ Panel {
                 width: profileRow.cellWidth
                 iconText: root.profileIcon(String(modelData))
                 iconSize: Style.font.title
-                text: String(modelData).charAt(0).toUpperCase() + String(modelData).slice(1)
+                text: Model.safeText(String(modelData).charAt(0).toUpperCase() + String(modelData).slice(1), 24)
                 fontSize: Style.font.bodySmall
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily

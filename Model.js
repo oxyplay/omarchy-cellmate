@@ -9,27 +9,48 @@ function selectProfileIndex(index, delta, profiles) {
   return clampIndex(index + delta, values.length)
 }
 
+function clip(s, n) {
+  s = String(s == null ? "" : s)
+  return s.length > n ? s.substring(0, n) : s
+}
+
+function safeText(s, n) {
+  s = clip(s, n)
+  return s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+}
+
 function parseKeyValue(raw) {
   var next = {}
-  var lines = String(raw || "").split("\n")
-  for (var i = 0; i < lines.length; i++) {
+  var lines = String(raw || "")
+  if (lines.length > 8192) lines = lines.substring(0, 8192)
+  lines = lines.split("\n")
+  var count = 0
+  for (var i = 0; i < lines.length && count < 32; i++) {
     var idx = lines[i].indexOf("\t")
     if (idx <= 0) continue
-    next[lines[i].substring(0, idx)] = lines[i].substring(idx + 1).trim()
+    var key = safeText(lines[i].substring(0, idx).trim(), 32)
+    if (!key) continue
+    next[key] = safeText(lines[i].substring(idx + 1).trim(), 96)
+    count++
   }
   return next
 }
 
 function parseProfiles(raw, previousIndex) {
-  var lines = String(raw || "").split("\n")
+  var blob = String(raw || "")
+  if (blob.length > 4096) blob = blob.substring(0, 4096)
+  var lines = blob.split("\n")
   var list = []
   var active = ""
-  for (var i = 0; i < lines.length; i++) {
+  for (var i = 0; i < lines.length && list.length < 8; i++) {
     var line = lines[i].trim()
     if (!line) continue
     var parts = line.split("\t")
-    list.push(parts[0])
-    if (parts[1] === "1") active = parts[0]
+    if (parts.length < 2) continue
+    var name = safeText(parts[0], 32)
+    if (!/^[a-z0-9_-]+$/.test(name)) continue
+    list.push(name)
+    if (parts[1] === "1") active = name
   }
   return {
     profiles: list,
@@ -138,6 +159,8 @@ if (typeof module !== "undefined") {
   module.exports = {
     clampIndex: clampIndex,
     selectProfileIndex: selectProfileIndex,
+    clip: clip,
+    safeText: safeText,
     parseKeyValue: parseKeyValue,
     parseProfiles: parseProfiles,
     profileIcon: profileIcon,

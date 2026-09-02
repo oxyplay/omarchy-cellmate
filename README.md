@@ -57,8 +57,8 @@ real load changes.
 
 - `Panel.qml` — the widget (aggregation, chart, consumers, UI)
 - `Model.js` — pure helpers (icons, labels, formatting)
-- `topconsumers.sh` — CPU-share sampler (embedded into `Panel.qml` as base64;
-  regenerate with `base64 -w0 topconsumers.sh`)
+- `history.py` — load/append `power-history.log` via a private dir FD
+- `topconsumers.sh` — CPU-share sampler (bounded /proc walk)
 - `manifest.json` — Omarchy plugin manifest
 
 ## Origin
