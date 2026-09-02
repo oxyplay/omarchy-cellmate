@@ -35,21 +35,41 @@ def open_state_dir():
         if not home:
             raise OSError("no HOME")
         state = os.path.join(home, ".local", "state")
-    state = os.path.abspath(state)
-    omarchy = os.path.join(state, "omarchy")
-    os.makedirs(state, mode=0o755, exist_ok=True)
+    # realpath resolves any system-level symlinks (macOS /var -> /private/var),
+    # then the walk from / uses O_DIRECTORY|O_NOFOLLOW on every component to
+    # prevent symlink-redirection races in parent directories. os.makedirs
+    # followed by O_NOFOLLOW only protects the final component.
+    state = os.path.realpath(state)
+    parts = [p for p in state.split(os.sep) if p]
+    fd = os.open(b"/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        os.mkdir(omarchy, 0o700)
-    except FileExistsError:
-        pass
-    fd = os.open(omarchy, OPEN_DIR)
-    st = os.fstat(fd)
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        for part in parts:
+            try:
+                os.mkdir(part, mode=0o755, dir_fd=fd)
+            except FileExistsError:
+                pass
+            next_fd = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=fd,
+            )
+            os.close(fd)
+            fd = next_fd
+        # fd is now the state directory
+        try:
+            os.mkdir("omarchy", mode=0o700, dir_fd=fd)
+        except FileExistsError:
+            pass
+        omarchy_fd = os.open("omarchy", OPEN_DIR, dir_fd=fd)
+        st = os.fstat(omarchy_fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            os.close(omarchy_fd)
+            raise OSError("state dir not private")
+        if st.st_mode & 0o077:
+            os.fchmod(omarchy_fd, 0o700)
+        return omarchy_fd
+    finally:
         os.close(fd)
-        raise OSError("state dir not private")
-    if st.st_mode & 0o077:
-        os.fchmod(fd, 0o700)
-    return fd
 
 
 def _owned_reg(fd):

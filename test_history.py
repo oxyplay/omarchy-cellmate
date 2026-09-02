@@ -100,6 +100,44 @@ class HistorySecurity(unittest.TestCase):
             history.open_state_dir()
         self.dirfd = os.open(self.tmp, os.O_RDONLY | os.O_DIRECTORY)
 
+    def test_ancestor_symlink_resolved(self):
+        """Symlink in an ancestor resolves via realpath; walk creates omarchy at real location."""
+        base = tempfile.mkdtemp(prefix="cellmate-ancestor-")
+        try:
+            target = os.path.join(base, "target")
+            os.mkdir(target)
+            link = os.path.join(base, "link")
+            os.symlink(target, link)
+            state_dir = os.path.join(link, "state")
+            os.environ["XDG_STATE_HOME"] = state_dir
+            os.environ.pop("HOME", None)
+            fd = history.open_state_dir()
+            resolved = os.path.realpath(state_dir)
+            omarchy_path = os.path.join(resolved, "omarchy")
+            self.assertTrue(os.path.isdir(omarchy_path))
+            self.assertEqual(os.stat(omarchy_path).st_uid, os.getuid())
+            os.close(fd)
+        finally:
+            os.system("rm -rf %s" % base)
+
+    def test_panel_qml_process_safety(self):
+        """Every Process block in Panel.qml has clearEnvironment + trusted PATH."""
+        panel_path = os.path.join(os.path.dirname(__file__), "Panel.qml")
+        with open(panel_path) as f:
+            content = f.read()
+        proc_blocks = sum(1 for line in content.splitlines() if "Process {" in line)
+        clear_env = content.count("clearEnvironment: true")
+        trusted_path = content.count("/run/current-system/sw/bin:/usr/bin:/bin")
+        self.assertGreater(proc_blocks, 0, "no Process blocks found in Panel.qml")
+        self.assertEqual(
+            proc_blocks, clear_env,
+            f"Panel.qml: {proc_blocks} Process blocks, {clear_env} have clearEnvironment: true"
+        )
+        self.assertEqual(
+            proc_blocks, trusted_path,
+            f"Panel.qml: {proc_blocks} Process blocks, {trusted_path} have trusted PATH"
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

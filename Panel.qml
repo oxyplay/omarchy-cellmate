@@ -610,6 +610,12 @@ Panel {
   // sysfs-only battery details (charge thresholds, cycle counts) per battery.
   Process {
     id: detailsProc
+    clearEnvironment: true
+    environment: ({
+      PATH: "/run/current-system/sw/bin:/usr/bin:/bin",
+      HOME: null,
+      XDG_STATE_HOME: null,
+    })
     command: root.timeoutCmd(3, ["sh", "-c",
       "c=0; for d in /sys/class/power_supply/BAT*; do " +
       "[ -d \"$d\" ] || continue; c=$((c+1)); [ \"$c\" -gt 8 ] && break; " +
@@ -625,6 +631,12 @@ Panel {
   // Load persisted history back (newest 24h) at shell startup.
   Process {
     id: histLoad
+    clearEnvironment: true
+    environment: ({
+      PATH: "/run/current-system/sw/bin:/usr/bin:/bin",
+      HOME: null,
+      XDG_STATE_HOME: null,
+    })
     running: true
     command: root.timeoutCmd(3, ["python3", root.pluginPath("history.py"), "load"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateHistoryFromFile(text) }
@@ -633,6 +645,12 @@ Panel {
   // Appends one "t p r b" line per sample; see sampleHistory().
   Process {
     id: histAppend
+    clearEnvironment: true
+    environment: ({
+      PATH: "/run/current-system/sw/bin:/usr/bin:/bin",
+      HOME: null,
+      XDG_STATE_HOME: null,
+    })
   }
 
   // Top consumers: current CPU share over a 1s window (delta of utime+stime
@@ -640,18 +658,36 @@ Panel {
   // into watts of the measured battery draw when discharging.
   Process {
     id: topProc
+    clearEnvironment: true
+    environment: ({
+      PATH: "/run/current-system/sw/bin:/usr/bin:/bin",
+      HOME: null,
+      XDG_STATE_HOME: null,
+    })
     command: root.timeoutCmd(5, ["sh", root.pluginPath("topconsumers.sh")])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateTopConsumers(text) }
   }
 
   Process {
     id: profilesProc
+    clearEnvironment: true
+    environment: ({
+      PATH: "/run/current-system/sw/bin:/usr/bin:/bin",
+      HOME: null,
+      XDG_STATE_HOME: null,
+    })
     command: root.timeoutCmd(3, ["sh", "-c", "omarchy-powerprofiles-list --active-state | head -c 4096"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateProfiles(text) }
   }
 
   Process {
     id: actionProc
+    clearEnvironment: true
+    environment: ({
+      PATH: "/run/current-system/sw/bin:/usr/bin:/bin",
+      HOME: null,
+      XDG_STATE_HOME: null,
+    })
     onExited: root.refresh()
   }
 
