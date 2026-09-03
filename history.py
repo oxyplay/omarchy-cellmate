@@ -50,33 +50,60 @@ def open_state_dir():
     fd = os.open(b"/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         for part in parts:
-            # First, try to open existing component with O_NOFOLLOW.
+            # Try to open existing component with O_NOFOLLOW.
             # This verifies it's a directory and not a symlink.
             try:
                 next_fd = os.open(part, OPEN_DIR, dir_fd=fd)
-            except OSError as e:
-                if e.errno != 2:  # ENOENT
-                    # Could be ELOOP (symlink), EACCES, etc.
-                    # Check if it's a symlink.
+            except (OSError, NotADirectoryError) as e:
+                err = e.errno if hasattr(e, 'errno') else 2
+                # Could be ELOOP (symlink), NotADirectoryError (symlink on macOS),
+                # ENOENT (doesn't exist), EACCES, etc.
+                is_symlink = False
+                link_target_root = False
+                try:
+                    link_st = os.stat(part, dir_fd=fd, follow_symlinks=False)
+                    if stat.S_ISLNK(link_st.st_mode):
+                        is_symlink = True
+                        # Follow only if link AND target are root-owned
+                        # (platform system symlink, e.g. /var -> /private/var on macOS)
+                        target_fd = os.open(
+                            part,
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+                            dir_fd=fd,
+                        )
+                        try:
+                            target_st = os.fstat(target_fd)
+                            if link_st.st_uid == 0 and target_st.st_uid == 0:
+                                link_target_root = True
+                                next_fd = target_fd
+                                target_fd = -1
+                        finally:
+                            if target_fd >= 0:
+                                os.close(target_fd)
+                except OSError:
+                    pass
+                if is_symlink:
+                    if link_target_root:
+                        # Root-owned symlink to root-owned dir: follow it.
+                        pass
+                    else:
+                        raise OSError("symlink in state path")
+                elif err == 2:  # ENOENT - component doesn't exist
+                    # Verify no symlink exists at this name.
                     try:
                         link_st = os.stat(part, dir_fd=fd, follow_symlinks=False)
                         if stat.S_ISLNK(link_st.st_mode):
                             raise OSError("symlink in state path")
-                    except OSError:
-                        pass
+                    except OSError as e2:
+                        if e2.errno != 2:  # ENOENT
+                            raise
+                    # Safe to create: no symlink, no directory.
+                    os.mkdir(part, mode=0o755, dir_fd=fd)
+                    # Now open and verify with O_NOFOLLOW.
+                    next_fd = os.open(part, OPEN_DIR, dir_fd=fd)
+                else:
+                    # Some other error (EACCES, etc.)
                     raise
-                # Component doesn't exist — verify no symlink exists at this name.
-                try:
-                    link_st = os.stat(part, dir_fd=fd, follow_symlinks=False)
-                    if stat.S_ISLNK(link_st.st_mode):
-                        raise OSError("symlink in state path")
-                except OSError as e2:
-                    if e2.errno != 2:  # ENOENT
-                        raise
-                # Safe to create: no symlink, no directory.
-                os.mkdir(part, mode=0o755, dir_fd=fd)
-                # Now open and verify with O_NOFOLLOW.
-                next_fd = os.open(part, OPEN_DIR, dir_fd=fd)
             # Verify ownership: must be root or current user.
             st = os.fstat(next_fd)
             if st.st_uid != 0 and st.st_uid != os.getuid():
@@ -88,24 +115,47 @@ def open_state_dir():
         # Create omarchy subdirectory with same verification.
         try:
             next_fd = os.open("omarchy", OPEN_DIR, dir_fd=fd)
-        except OSError as e:
-            if e.errno != 2:
+        except (OSError, NotADirectoryError) as e:
+            err = e.errno if hasattr(e, 'errno') else 2
+            is_symlink = False
+            link_target_root = False
+            try:
+                link_st = os.stat("omarchy", dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISLNK(link_st.st_mode):
+                    is_symlink = True
+                    target_fd = os.open(
+                        "omarchy",
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+                        dir_fd=fd,
+                    )
+                    try:
+                        target_st = os.fstat(target_fd)
+                        if link_st.st_uid == 0 and target_st.st_uid == 0:
+                            link_target_root = True
+                            next_fd = target_fd
+                            target_fd = -1
+                    finally:
+                        if target_fd >= 0:
+                            os.close(target_fd)
+            except OSError:
+                pass
+            if is_symlink:
+                if link_target_root:
+                    pass
+                else:
+                    raise OSError("symlink in state path")
+            elif err == 2:  # ENOENT
                 try:
                     link_st = os.stat("omarchy", dir_fd=fd, follow_symlinks=False)
                     if stat.S_ISLNK(link_st.st_mode):
                         raise OSError("symlink in state path")
-                except OSError:
-                    pass
+                except OSError as e2:
+                    if e2.errno != 2:
+                        raise
+                os.mkdir("omarchy", mode=0o700, dir_fd=fd)
+                next_fd = os.open("omarchy", OPEN_DIR, dir_fd=fd)
+            else:
                 raise
-            try:
-                link_st = os.stat("omarchy", dir_fd=fd, follow_symlinks=False)
-                if stat.S_ISLNK(link_st.st_mode):
-                    raise OSError("symlink in state path")
-            except OSError as e2:
-                if e2.errno != 2:
-                    raise
-            os.mkdir("omarchy", mode=0o700, dir_fd=fd)
-            next_fd = os.open("omarchy", OPEN_DIR, dir_fd=fd)
         st = os.fstat(next_fd)
         if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
             os.close(next_fd)
