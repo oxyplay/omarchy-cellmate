@@ -567,9 +567,8 @@ Panel {
   function setProfile(profile) {
     profile = Model.safeText(profile, 32)
     if (!/^[a-z0-9_-]+$/.test(profile) || actionProc.running) return
-    actionProc.command = root.timeoutCmd(3, ["/usr/bin/sh", "-c",
-      "\"$HOME/.local/share/omarchy/bin/omarchy-powerprofiles-set\" " +
-      (root.discharging ? "battery" : "ac") + " " + profile])
+    actionProc.command = root.timeoutCmd(3, ["/usr/bin/omarchy-powerprofiles-set",
+      (root.discharging ? "battery" : "ac"), profile])
     actionProc.running = true
   }
 
@@ -679,7 +678,7 @@ Panel {
       XDG_STATE_HOME: null,
     })
     command: root.timeoutCmd(3, ["/usr/bin/sh", "-c",
-      "\"$HOME/.local/share/omarchy/bin/omarchy-powerprofiles-list\" --active-state | /usr/bin/head -c 4096"])
+      "/usr/bin/omarchy-powerprofiles-list --active-state | /usr/bin/head -c 4096"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateProfiles(text) }
   }
 
