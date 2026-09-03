@@ -44,6 +44,8 @@ def open_state_dir():
     # whole tree; rejecting relative paths prevents cwd-dependent
     # state location.
     parts = [p for p in state.split(os.sep) if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        raise OSError("bad state path")
     fd = os.open(b"/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         for part in parts:
@@ -55,9 +57,14 @@ def open_state_dir():
                 next_fd = os.open(part, OPEN_DIR, dir_fd=fd)
             except OSError:
                 # The component may be a platform system symlink
-                # (e.g. /var -> /private/var on macOS). Open without
-                # O_NOFOLLOW and verify it is root-owned — only a
-                # root-owned existing entry may be followed.
+                # (e.g. /var -> /private/var on macOS). Follow it only
+                # when the link itself AND its target are root-owned —
+                # a user-owned link to a root-owned dir must not pass.
+                link_st = os.stat(
+                    part, dir_fd=fd, follow_symlinks=False
+                )
+                if link_st.st_uid != 0:
+                    raise OSError("non-root symlink in state path")
                 next_fd = os.open(
                     part,
                     os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,

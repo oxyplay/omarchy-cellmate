@@ -182,6 +182,30 @@ class HistorySecurity(unittest.TestCase):
                     "histAppend", "topProc", "actionProc"}
         missing = expected - known_pids
         self.assertFalse(missing, f"expected Process blocks missing: {missing}")
+        # Whole-file hostile-PATH scan: dynamic commands set outside
+        # Process blocks (histAppend in sampleHistory, actionProc in
+        # setProfile) must also avoid bare executables.
+        self.assertNotIn('["timeout"', content,
+                         "bare timeout array; must be /usr/bin/timeout")
+        self.assertNotIn('["python3"', content,
+                         "bare python3 array; must be /usr/bin/python3")
+        self.assertNotIn('["sh"', content,
+                         'bare sh array; must be /usr/bin/sh')
+        self.assertNotIn('"omarchy-powerprofiles-', content,
+                         "bare omarchy command; must go through $HOME path")
+        # Inner sh -c utilities must be absolute or covered by pinned PATH;
+        # dd/tr/head are pinned to absolute paths.
+        self.assertIn("/usr/bin/dd", content, "dd must be absolute")
+        self.assertIn("/usr/bin/tr", content, "tr must be absolute")
+        self.assertIn("/usr/bin/head", content, "head must be absolute")
+
+    def test_bad_state_paths_rejected(self):
+        """Dot components and filesystem root are rejected."""
+        for bad in ("/", "/tmp/../evil", "/tmp/./state"):
+            os.environ["XDG_STATE_HOME"] = bad
+            os.environ.pop("HOME", None)
+            with self.assertRaises(OSError, msg=bad):
+                history.open_state_dir()
 
 
 if __name__ == "__main__":

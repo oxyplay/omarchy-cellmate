@@ -625,7 +625,7 @@ Panel {
       "[ ${#b} -gt 16 ] && continue; " +
       "for spec in cycle_count:cycles charge_control_end_threshold:threshold charge_control_start_threshold:threshold-start; do " +
       "f=${spec%%:*}; n=${spec##*:}; [ -r \"$d/$f\" ] || continue; " +
-      "v=$(dd if=\"$d/$f\" bs=16 count=1 2>/dev/null | tr -cd '0-9'); " +
+      "v=$(/usr/bin/dd if=\"$d/$f\" bs=16 count=1 2>/dev/null | /usr/bin/tr -cd '0-9'); " +
       "[ -n \"$v\" ] && printf '%s\\t%s\\t%s\\n' \"$n\" \"$b\" \"$v\"; " +
       "done; done"])
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateBatteryDetails(text) }
